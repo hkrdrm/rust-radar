@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::fetch::Fetcher;
-use crate::nhc_archive::{NhcArchive, StormSnapshot, GEOMETRY_NONE};
+use crate::nhc_archive::{geometry_rank, NhcArchive, StormSnapshot, GEOMETRY_MAPSERVER, GEOMETRY_NONE, GEOMETRY_ZIP};
 use crate::sources::nhc_zip;
 use crate::status::{backoff_delay, Status};
 
@@ -191,6 +191,10 @@ pub async fn poll_once(fetcher: &dyn Fetcher, archive: &NhcArchive) -> anyhow::R
     };
     for storm in pending {
         let (features, geometry_source) = fetch_geometry(fetcher, index.as_ref(), storm).await;
+        let existing = archive.geometry_source(&storm.id, storm.issuance);
+        if existing.is_some_and(|e| geometry_rank(&e) > geometry_rank(geometry_source)) {
+            continue;
+        }
         archive.store(&StormSnapshot {
             storm: storm.clone(),
             features,
@@ -209,13 +213,13 @@ async fn fetch_geometry(
 ) -> (Vec<Value>, &'static str) {
     if let Some(index) = index {
         match fetch_mapserver_features(fetcher, index, storm).await {
-            Ok(features) => return (features, "mapserver"),
+            Ok(features) => return (features, GEOMETRY_MAPSERVER),
             Err(e) => warn!("NHC map service geometry for {} failed: {e:#}", storm.id),
         }
     }
     if let Some(url) = &storm.forecast_zip_url {
         match fetcher.get(url).await.and_then(|b| nhc_zip::features_from_zip(&b, &storm.id)) {
-            Ok(features) => return (features, "zip"),
+            Ok(features) => return (features, GEOMETRY_ZIP),
             Err(e) => warn!("NHC advisory zip for {} failed: {e:#}", storm.id),
         }
     }

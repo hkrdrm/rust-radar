@@ -50,6 +50,8 @@ fn has_geometry_only_for_real_geometry() {
     archive.store(&snapshot(t(8, 15), "008", GEOMETRY_NONE)).unwrap();
     assert!(!archive.has_geometry("al092026", t(8, 15)));
     archive.store(&snapshot(t(8, 15), "008", "zip")).unwrap();
+    assert!(!archive.has_geometry("al092026", t(8, 15)), "zip lacks wind radii and past track");
+    archive.store(&snapshot(t(8, 15), "008", "mapserver")).unwrap();
     assert!(archive.has_geometry("al092026", t(8, 15)));
 }
 

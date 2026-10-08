@@ -22,12 +22,16 @@ struct Harness {
     _dir: tempfile::TempDir,
 }
 
+/// A second frame whose file is on disk but cannot be decoded.
+const BROKEN_FRAME: &str = "2026-10-08T17:02:00Z";
+
 fn harness() -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let mrms = Arc::new(MrmsArchive::open(dir.path().join("mrms"), 2).unwrap());
     let frame = Utc.with_ymd_and_hms(2026, 10, 8, 17, 0, 0).unwrap();
     let grid = mrms.store(frame, &common::mrms_fixture()).unwrap();
     let rainy = common::rainy_tile(&grid, 7);
+    std::fs::write(dir.path().join("mrms").join("20261008-170200.grib2.gz"), b"not a grib").unwrap();
     let nhc = Arc::new(NhcArchive::open(dir.path().join("nhc")).unwrap());
     nhc.store(&StormSnapshot {
         storm: common::isaias(),
@@ -69,7 +73,7 @@ async fn lists_frames() {
     let h = harness();
     let r = get(&h, "/api/frames").await;
     assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(r.json(), json!({"frames": [FRAME], "latest": FRAME}));
+    assert_eq!(r.json(), json!({"frames": [FRAME, BROKEN_FRAME], "latest": BROKEN_FRAME}));
 }
 
 #[tokio::test]
@@ -90,7 +94,9 @@ async fn serves_rainy_tile_with_long_cache() {
 async fn latest_tile_is_not_cached_by_browser() {
     let h = harness();
     let (x, y) = h.rainy;
-    let r = get(&h, &format!("/tiles/latest/7/{x}/{y}.png")).await;
+    let r = get(&h, &format!("/tiles/{FRAME}/7/{x}/{y}.png")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = get(&h, &format!("/tiles/latest/3/4/2.png")).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.headers["cache-control"], "no-cache");
 }
@@ -154,4 +160,16 @@ async fn config_status_and_frontend() {
     let index = get(&h, "/").await;
     assert_eq!(index.status, StatusCode::OK);
     assert_eq!(index.body, b"hello radar");
+}
+
+#[tokio::test]
+async fn tiles_outside_radar_coverage_skip_decoding() {
+    let h = harness();
+    let (x, y) = h.rainy;
+    // Learn the grid extent from a frame that decodes.
+    assert_eq!(get(&h, &format!("/tiles/{FRAME}/7/{x}/{y}.png")).await.status, StatusCode::OK);
+    // Open Atlantic east of 60W: no decode needed, so even an undecodable frame serves an empty tile.
+    let ocean = get(&h, &format!("/tiles/{BROKEN_FRAME}/5/12/12.png")).await;
+    assert_eq!(ocean.status, StatusCode::OK);
+    assert_eq!(common::opaque_pixels(&common::decode_png(&ocean.body)), 0);
 }

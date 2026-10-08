@@ -57,3 +57,21 @@ fn prune_removes_only_older_frames() {
     assert_eq!(archive.frames().unwrap(), vec![t(17, 4)]);
     assert!(archive.load(t(17, 0)).is_err(), "pruned frame must not be served from cache");
 }
+
+#[test]
+fn concurrent_loads_of_one_frame_share_a_single_decode() {
+    let dir = tempfile::tempdir().unwrap();
+    MrmsArchive::open(dir.path(), 2).unwrap().store(t(17, 0), &common::mrms_fixture()).unwrap();
+    // Fresh instance: empty cache, so every thread misses at once.
+    let archive = std::sync::Arc::new(MrmsArchive::open(dir.path(), 2).unwrap());
+    let grids: Vec<_> = (0..6)
+        .map(|_| {
+            let archive = std::sync::Arc::clone(&archive);
+            std::thread::spawn(move || archive.load(t(17, 0)).unwrap())
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(grids.iter().all(|g| std::sync::Arc::ptr_eq(g, &grids[0])), "each miss decoded separately");
+}

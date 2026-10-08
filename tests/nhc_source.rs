@@ -103,3 +103,35 @@ async fn feed_failure_is_an_error() {
     fake.fail(CURRENT_STORMS_URL, "503");
     assert!(poll_once(&fake, &archive).await.is_err());
 }
+
+#[tokio::test]
+async fn zip_snapshot_is_upgraded_once_map_service_catches_up() {
+    let (_dir, archive) = archive();
+    let lagging = fake_with_mapserver("7");
+    lagging.ok(ZIP_URL, common::nhc_zip_fixture());
+    poll_once(&lagging, &archive).await.unwrap();
+    assert_eq!(stored(&archive).geometry_source, "zip");
+
+    let caught_up = fake_with_mapserver("8");
+    poll_once(&caught_up, &archive).await.unwrap();
+    let snapshot = stored(&archive);
+    assert_eq!(snapshot.geometry_source, "mapserver");
+    assert!(snapshot.features.iter().any(|f| f["properties"]["layer"] == "wind_radii"));
+}
+
+#[tokio::test]
+async fn later_failure_never_downgrades_stored_geometry() {
+    let (_dir, archive) = archive();
+    let lagging = fake_with_mapserver("7");
+    lagging.ok(ZIP_URL, common::nhc_zip_fixture());
+    poll_once(&lagging, &archive).await.unwrap();
+
+    let broken = FakeFetcher::new();
+    broken.ok(CURRENT_STORMS_URL, STORMS);
+    broken.fail(&layer_index_url(), "503");
+    broken.fail(ZIP_URL, "404");
+    poll_once(&broken, &archive).await.unwrap();
+    let snapshot = stored(&archive);
+    assert_eq!(snapshot.geometry_source, "zip");
+    assert!(!snapshot.features.is_empty());
+}

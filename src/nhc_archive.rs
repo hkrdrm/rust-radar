@@ -11,6 +11,18 @@ use serde_json::Value;
 use crate::sources::nhc::StormInfo;
 
 pub const GEOMETRY_NONE: &str = "none";
+pub const GEOMETRY_ZIP: &str = "zip";
+/// Only the map service carries wind radii and past track; anything else is provisional.
+pub const GEOMETRY_MAPSERVER: &str = "mapserver";
+
+/// Higher is more complete.
+pub fn geometry_rank(source: &str) -> u8 {
+    match source {
+        GEOMETRY_MAPSERVER => 2,
+        GEOMETRY_ZIP => 1,
+        _ => 0,
+    }
+}
 /// A storm with no advisory for this long is treated as gone.
 pub const STALE_AFTER_HOURS: i64 = 12;
 /// NHC posts advisories shortly before their nominal issuance time.
@@ -68,10 +80,17 @@ impl NhcArchive {
         Ok(())
     }
 
+    /// Geometry source of the stored snapshot for this advisory, if any.
+    pub fn geometry_source(&self, storm_id: &str, issuance: DateTime<Utc>) -> Option<String> {
+        if !valid_storm_id(storm_id) {
+            return None;
+        }
+        read_snapshot(&self.snapshot_path(storm_id, issuance)).ok().map(|s| s.geometry_source)
+    }
+
+    /// True once the advisory has complete (map-service) geometry; nothing left to fetch.
     pub fn has_geometry(&self, storm_id: &str, issuance: DateTime<Utc>) -> bool {
-        valid_storm_id(storm_id)
-            && read_snapshot(&self.snapshot_path(storm_id, issuance))
-                .is_ok_and(|s| s.geometry_source != GEOMETRY_NONE)
+        self.geometry_source(storm_id, issuance).as_deref() == Some(GEOMETRY_MAPSERVER)
     }
 
     fn issuances(&self, storm_id: &str) -> anyhow::Result<Vec<DateTime<Utc>>> {

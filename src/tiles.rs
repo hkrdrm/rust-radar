@@ -37,10 +37,15 @@ pub fn tile_bounds(z: u8, x: u32, y: u32) -> (f64, f64, f64, f64) {
     (south, west, north, east)
 }
 
-pub fn render_tile(grid: &Grid, z: u8, x: u32, y: u32) -> Vec<u8> {
+/// Whether tile (z, x, y) overlaps `bounds` given as (south, west, north, east).
+pub fn tile_overlaps(bounds: (f64, f64, f64, f64), z: u8, x: u32, y: u32) -> bool {
     let (s, w, n, e) = tile_bounds(z, x, y);
-    let (gs, gw, gn, ge) = grid.bounds();
-    if s >= gn || n <= gs || w >= ge || e <= gw {
+    let (gs, gw, gn, ge) = bounds;
+    s < gn && n > gs && w < ge && e > gw
+}
+
+pub fn render_tile(grid: &Grid, z: u8, x: u32, y: u32) -> Vec<u8> {
+    if !tile_overlaps(grid.bounds(), z, x, y) {
         return empty_tile_png().to_vec();
     }
     let size = TILE_SIZE as usize;

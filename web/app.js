@@ -81,14 +81,15 @@ function showFrame(i) {
   state.map.getSource('radar').setTiles([tileUrl(time)]);
   $('slider').value = i;
   $('time-label').textContent = formatTime(time);
-  loadStorms(time);
+  // Live storms come from "now", independent of radar, so a radar outage cannot hide or freeze them.
+  loadStorms(state.live ? null : time);
   renderStatus();
 }
 
 async function loadStorms(time) {
   const request = ++state.stormRequest;
   try {
-    const data = await getJson(`/api/storms?time=${encodeURIComponent(time)}`);
+    const data = await getJson(time ? `/api/storms?time=${encodeURIComponent(time)}` : '/api/storms');
     if (request !== state.stormRequest) return;
     state.map.getSource('storms').setData(data);
     state.stormCount = data.features.filter((f) => f.properties.layer === 'center').length;
@@ -112,7 +113,11 @@ function stopPlayback() {
 function startPlayback() {
   if (state.frames.length < 2) return;
   setLive(false);
-  state.timer = setInterval(() => showFrame((state.index + 1) % state.frames.length), Number($('speed').value));
+  state.timer = setInterval(() => {
+    // Wait for the current frame's tiles; otherwise requests pile up faster than the server can render.
+    if (!state.map.isSourceLoaded('radar')) return;
+    showFrame((state.index + 1) % state.frames.length);
+  }, Number($('speed').value));
   $('play').textContent = '⏸';
 }
 
@@ -224,17 +229,24 @@ async function init() {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     }
+    loadStorms(null);
     await Promise.all([refreshFrames(), refreshStatus()]);
     setInterval(() => refreshFrames().catch(console.warn), 60_000);
+    setInterval(() => { if (state.live) loadStorms(null); }, 60_000);
     setInterval(refreshStatus, 30_000);
   });
 
   $('play').addEventListener('click', () => (state.timer ? stopPlayback() : startPlayback()));
   $('live').addEventListener('click', goLive);
+  // While dragging, only move the label; load the frame once the user pauses or releases.
+  let scrub = null;
   $('slider').addEventListener('input', (e) => {
     stopPlayback();
     setLive(false);
-    showFrame(Number(e.target.value));
+    const i = Number(e.target.value);
+    $('time-label').textContent = formatTime(state.frames[i]);
+    clearTimeout(scrub);
+    scrub = setTimeout(() => showFrame(i), 250);
   });
   $('speed').addEventListener('change', () => {
     if (state.timer) { stopPlayback(); startPlayback(); }

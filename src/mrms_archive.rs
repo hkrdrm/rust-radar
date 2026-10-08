@@ -1,9 +1,10 @@
 //! Rolling on-disk store of MRMS frames with an LRU of decoded grids.
 
+use std::collections::HashMap;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Context;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -23,9 +24,15 @@ fn parse_frame_file_name(name: &str) -> Option<DateTime<Utc>> {
     NaiveDateTime::parse_from_str(stem, TIME_FORMAT).ok().map(|n| n.and_utc())
 }
 
+type Decode = Arc<OnceLock<Result<Arc<Grid>, String>>>;
+
 pub struct MrmsArchive {
     dir: PathBuf,
     cache: Mutex<LruCache<DateTime<Utc>, Arc<Grid>>>,
+    /// One decode per frame at a time; concurrent misses wait for it.
+    in_flight: Mutex<HashMap<DateTime<Utc>, Decode>>,
+    /// (south, west, north, east) of the last decoded grid.
+    bounds: Mutex<Option<(f64, f64, f64, f64)>>,
 }
 
 impl MrmsArchive {
@@ -39,7 +46,12 @@ impl MrmsArchive {
             }
         }
         let capacity = NonZeroUsize::new(cache_frames.max(1)).expect("max(1) is non-zero");
-        Ok(MrmsArchive { dir, cache: Mutex::new(LruCache::new(capacity)) })
+        Ok(MrmsArchive {
+            dir,
+            cache: Mutex::new(LruCache::new(capacity)),
+            in_flight: Mutex::new(HashMap::new()),
+            bounds: Mutex::new(None),
+        })
     }
 
     pub fn frames(&self) -> anyhow::Result<Vec<DateTime<Utc>>> {
@@ -68,7 +80,7 @@ impl MrmsArchive {
         let tmp = self.dir.join(format!("{}.tmp", frame_file_name(t)));
         fs::write(&tmp, gz).with_context(|| format!("writing {}", tmp.display()))?;
         fs::rename(&tmp, &path).with_context(|| format!("renaming to {}", path.display()))?;
-        self.cache.lock().unwrap().put(t, Arc::clone(&grid));
+        self.remember(t, &grid);
         Ok(grid)
     }
 
@@ -76,12 +88,29 @@ impl MrmsArchive {
         if let Some(grid) = self.cache.lock().unwrap().get(&t) {
             return Ok(Arc::clone(grid));
         }
-        let path = self.dir.join(frame_file_name(t));
-        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        // Decode outside the lock; two concurrent misses just decode twice.
-        let grid = Arc::new(Grid::from_grib2_gz(&bytes).with_context(|| format!("decoding {}", path.display()))?);
-        self.cache.lock().unwrap().put(t, Arc::clone(&grid));
-        Ok(grid)
+        let decode = Arc::clone(self.in_flight.lock().unwrap().entry(t).or_default());
+        let result = decode.get_or_init(|| {
+            let path = self.dir.join(frame_file_name(t));
+            let grid = fs::read(&path)
+                .with_context(|| format!("reading {}", path.display()))
+                .and_then(|bytes| Grid::from_grib2_gz(&bytes).with_context(|| format!("decoding {}", path.display())))
+                .map_err(|e| format!("{e:#}"))?;
+            let grid = Arc::new(grid);
+            self.remember(t, &grid);
+            Ok(grid)
+        });
+        self.in_flight.lock().unwrap().remove(&t);
+        result.clone().map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Outer edges of the radar grid, once any frame has been decoded.
+    pub fn known_bounds(&self) -> Option<(f64, f64, f64, f64)> {
+        *self.bounds.lock().unwrap()
+    }
+
+    fn remember(&self, t: DateTime<Utc>, grid: &Arc<Grid>) {
+        *self.bounds.lock().unwrap() = Some(grid.bounds());
+        self.cache.lock().unwrap().put(t, Arc::clone(grid));
     }
 
     pub fn prune(&self, cutoff: DateTime<Utc>) -> anyhow::Result<usize> {
