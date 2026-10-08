@@ -27,3 +27,9 @@ pub fn rainy_cell(grid: &Grid) -> usize {
         .position(|&v| decode_dbz(v).is_some_and(|d| d >= 30.0))
         .expect("fixture has no echo >= 30 dBZ; re-download it when it is raining somewhere")
 }
+
+/// A tile at zoom `z` that contains at least one cell with 30+ dBZ.
+pub fn rainy_tile(grid: &Grid, z: u8) -> (u32, u32) {
+    let (lat, lon) = grid.cell_center(rainy_cell(grid));
+    rust_radar::tiles::latlon_to_tile(z, lat, lon)
+}
