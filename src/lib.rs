@@ -5,3 +5,4 @@ pub mod tiles;
 pub mod mrms_archive;
 pub mod fetch;
 pub mod status;
+pub mod sources;
