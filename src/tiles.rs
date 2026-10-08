@@ -50,7 +50,7 @@ const HATCH_SPACING: usize = 8;
 
 fn no_coverage_pixel(px: usize, py: usize) -> [u8; 4] {
     // Tile sizes are multiples of the spacing, so the hatch lines up across tiles.
-    if (px + py) % HATCH_SPACING == 0 { NO_COVERAGE_RGBA } else { [0, 0, 0, 0] }
+    if (px + py).is_multiple_of(HATCH_SPACING) { NO_COVERAGE_RGBA } else { [0, 0, 0, 0] }
 }
 
 pub fn render_tile(grid: &Grid, z: u8, x: u32, y: u32) -> Vec<u8> {

@@ -96,7 +96,7 @@ async fn latest_tile_is_not_cached_by_browser() {
     let (x, y) = h.rainy;
     let r = get(&h, &format!("/tiles/{FRAME}/7/{x}/{y}.png")).await;
     assert_eq!(r.status, StatusCode::OK);
-    let r = get(&h, &format!("/tiles/latest/3/4/2.png")).await;
+    let r = get(&h, "/tiles/latest/3/4/2.png").await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.headers["cache-control"], "no-cache");
 }
@@ -114,7 +114,9 @@ async fn bad_tile_requests_are_client_errors() {
         format!("/tiles/{FRAME}/2/0/0"),
         format!("/tiles/{FRAME}/abc/0/0.png"),
     ] {
-        assert_eq!(get(&h, &uri).await.status, StatusCode::BAD_REQUEST, "{uri}");
+        let r = get(&h, &uri).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{uri}");
+        assert!(r.json()["error"].is_string(), "{uri}: errors are JSON");
     }
 }
 

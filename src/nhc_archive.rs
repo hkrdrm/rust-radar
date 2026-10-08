@@ -166,7 +166,7 @@ impl NhcArchive {
             return Ok(None);
         }
         let visible_until = t + Duration::minutes(EARLY_PUBLISH_MINUTES);
-        let current = self.issuances(storm_id)?.into_iter().filter(|&i| i <= visible_until).last();
+        let current = self.issuances(storm_id)?.into_iter().rev().find(|&i| i <= visible_until);
         match current {
             Some(issuance) if t - issuance <= Duration::hours(STALE_AFTER_HOURS) => {
                 Ok(Some(read_snapshot(&self.snapshot_path(storm_id, issuance))?))

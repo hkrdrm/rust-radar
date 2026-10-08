@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
+use axum::extract::rejection::PathRejection;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -61,8 +62,28 @@ pub enum ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
-        ApiError::Internal(e)
+        // A file that vanished (e.g. a frame pruned mid-request) is a 404, not a server fault.
+        let missing = e
+            .chain()
+            .any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound));
+        if missing {
+            ApiError::NotFound(format!("{e:#}"))
+        } else {
+            ApiError::Internal(e)
+        }
     }
+}
+
+/// Runs archive (filesystem) work off the async runtime.
+async fn blocking<T, F>(work: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("blocking task failed: {e}")))?
+        .map_err(ApiError::from)
 }
 
 impl IntoResponse for ApiError {
@@ -105,7 +126,7 @@ async fn get_config(State(st): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn get_frames(State(st): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let frames = st.mrms.frames()?;
+    let frames = blocking(move || st.mrms.frames()).await?;
     let latest = frames.last().copied().map(rfc3339);
     let frames: Vec<String> = frames.into_iter().map(rfc3339).collect();
     Ok(Json(json!({ "frames": frames, "latest": latest })))
@@ -118,7 +139,7 @@ async fn get_status(State(st): State<Arc<AppState>>) -> Json<Value> {
 async fn get_storms(State(st): State<Arc<AppState>>, Query(q): Query<TimeQuery>) -> Result<Json<Value>, ApiError> {
     let t = q.resolve()?;
     let mut features = Vec::new();
-    for snapshot in st.nhc.at_time(t)? {
+    for snapshot in blocking(move || st.nhc.at_time(t)).await? {
         let s = &snapshot.storm;
         features.push(json!({
             "type": "Feature",
@@ -146,9 +167,9 @@ async fn get_storm(
     Query(q): Query<TimeQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let t = q.resolve()?;
-    let snapshot = st
-        .nhc
-        .get(&id.to_lowercase(), t)?
+    let storm_id = id.to_lowercase();
+    let snapshot = blocking(move || st.nhc.get(&storm_id, t))
+        .await?
         .ok_or_else(|| ApiError::NotFound(format!("no advisory for storm {id:?} at {}", rfc3339(t))))?;
     let category = storm_category(&snapshot.storm);
     Ok(Json(json!({ "storm": snapshot.storm, "category": category, "geometry_source": snapshot.geometry_source })))
@@ -156,8 +177,9 @@ async fn get_storm(
 
 async fn get_tile(
     State(st): State<Arc<AppState>>,
-    UrlPath((time, z, x, y)): UrlPath<(String, u8, u32, String)>,
+    path: Result<UrlPath<(String, u8, u32, String)>, PathRejection>,
 ) -> Result<Response, ApiError> {
+    let UrlPath((time, z, x, y)) = path.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let y: u32 = y
         .strip_suffix(".png")
         .and_then(|v| v.parse().ok())
@@ -166,15 +188,17 @@ async fn get_tile(
         return Err(ApiError::BadRequest(format!("tile {z}/{x}/{y} is out of range (max zoom {})", tiles::MAX_ZOOM)));
     }
     let is_latest = time == "latest";
-    let t = if is_latest {
-        st.mrms.latest()?.ok_or_else(|| ApiError::NotFound("no radar frames yet".into()))?
-    } else {
-        let t = parse_time(&time)?;
-        if !st.mrms.contains(t) {
-            return Err(ApiError::NotFound(format!("no radar frame at {}", rfc3339(t))));
-        }
-        t
-    };
+    let requested = if is_latest { None } else { Some(parse_time(&time)?) };
+    let archive = Arc::clone(&st.mrms);
+    let t = blocking(move || match requested {
+        None => archive.latest()?.ok_or_else(|| anyhow::anyhow!(std::io::Error::new(std::io::ErrorKind::NotFound, "no radar frames yet"))),
+        Some(t) if archive.contains(t) => Ok(t),
+        Some(t) => Err(anyhow::anyhow!(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no radar frame at {}", rfc3339(t)),
+        ))),
+    })
+    .await?;
 
     if st.mrms.known_bounds().is_some_and(|b| !tiles::tile_overlaps(b, z, x, y)) {
         let cache_control = if is_latest { "no-cache" } else { "public, max-age=86400" };
@@ -201,4 +225,17 @@ async fn get_tile(
     };
     let cache_control = if is_latest { "no-cache" } else { "public, max-age=86400" };
     Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, cache_control)], png).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_file_errors_become_not_found() {
+        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let err = anyhow::Error::new(io).context("reading archive/mrms/20261008-170000.grib2.gz");
+        assert!(matches!(ApiError::from(err), ApiError::NotFound(_)), "frame pruned mid-request is a 404");
+        assert!(matches!(ApiError::from(anyhow::anyhow!("decode failed")), ApiError::Internal(_)));
+    }
 }
