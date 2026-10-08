@@ -3,3 +3,5 @@ pub mod palette;
 pub mod grid;
 pub mod tiles;
 pub mod mrms_archive;
+pub mod fetch;
+pub mod status;
