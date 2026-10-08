@@ -149,6 +149,19 @@ mod tests {
     }
 
     #[test]
+    fn production_config_is_lean_and_valid() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/deploy/rust-radar.prod.toml");
+        assert!(std::path::Path::new(path).exists(), "{path} is missing");
+        let c = Config::load(&cli(&["--config", path])).unwrap();
+        assert_eq!(c.port, 8090);
+        assert_eq!(c.archive_dir, std::path::PathBuf::from("/var/lib/rust-radar"));
+        assert_eq!(c.web_dir, std::path::PathBuf::from("/opt/rust-radar/web"));
+        assert_eq!(c.decoded_cache_frames, 2);
+        assert_eq!(c.backfill_hours, 2);
+        assert_eq!(c.retention_hours, 72);
+    }
+
+    #[test]
     fn rejects_invalid_values() {
         let missing = "/nonexistent/rust-radar.toml";
         assert!(Config::load(&cli(&["--config", missing, "--decoded-cache-frames", "0"])).is_err());

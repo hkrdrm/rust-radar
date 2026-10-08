@@ -1,0 +1,35 @@
+# systemd unit for rust-radar. deploy.sh install copies it to /etc/systemd/system/.
+[Unit]
+Description=rust-radar hurricane radar map
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/rust-radar/rust-radar --config /opt/rust-radar/rust-radar.toml
+Environment=RUST_LOG=info
+Restart=on-failure
+RestartSec=10
+
+# Throwaway system user; the archive lives in /var/lib/rust-radar, the only writable path.
+DynamicUser=yes
+StateDirectory=rust-radar
+
+# Share the droplet politely: measured peak is ~210 MB, idle ~55 MB.
+MemoryHigh=350M
+MemoryMax=400M
+CPUWeight=50
+
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

@@ -30,3 +30,8 @@ cargo test
 ```
 
 Tests use the fixtures in `tests/fixtures/` and never touch the network.
+
+## Deploy
+
+To run it on an Ubuntu server behind nginx with a password, see
+[deploy/README.md](deploy/README.md).

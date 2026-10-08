@@ -1,0 +1,11 @@
+# rust-radar production config, tuned for a 1 GB droplet shared with other sites.
+# Installed to /opt/rust-radar/rust-radar.toml by deploy.sh.
+port = 8090                          # nginx proxies to 127.0.0.1:8090
+archive_dir = "/var/lib/rust-radar"  # systemd StateDirectory, owned by the service
+web_dir = "/opt/rust-radar/web"
+retention_hours = 72                 # about 2 GB of radar on disk
+backfill_hours = 2                   # keeps the post-restart download/decode burst short
+mrms_poll_secs = 60
+nhc_poll_secs = 300
+decoded_cache_frames = 2             # about 25 MB each; raise to 10 on a 2 GB+ droplet
+basemap_style = "https://tiles.openfreemap.org/styles/dark"
