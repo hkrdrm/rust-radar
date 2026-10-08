@@ -33,3 +33,23 @@ pub fn rainy_tile(grid: &Grid, z: u8) -> (u32, u32) {
     let (lat, lon) = grid.cell_center(rainy_cell(grid));
     rust_radar::tiles::latlon_to_tile(z, lat, lon)
 }
+
+pub fn isaias() -> rust_radar::sources::nhc::StormInfo {
+    use chrono::TimeZone;
+    rust_radar::sources::nhc::StormInfo {
+        id: "al092026".into(),
+        bin_number: "AT4".into(),
+        name: "Isaias".into(),
+        classification: "HU".into(),
+        intensity_kt: 75,
+        pressure_mb: 975,
+        lat: 23.7,
+        lon: -90.2,
+        movement_dir: 60,
+        movement_speed_mph: 10,
+        advisory_num: "008".into(),
+        issuance: chrono::Utc.with_ymd_and_hms(2026, 10, 8, 15, 0, 0).unwrap(),
+        public_advisory_url: Some("https://www.nhc.noaa.gov/text/MIATCPAT4.shtml".into()),
+        forecast_zip_url: Some("https://www.nhc.noaa.gov/gis/forecast/archive/al092026_5day_008.zip".into()),
+    }
+}
