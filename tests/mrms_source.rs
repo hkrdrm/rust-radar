@@ -26,6 +26,8 @@ fn s3_listing(times: &[DateTime<Utc>]) -> String {
     format!("<ListBucketResult>{keys}</ListBucketResult>")
 }
 
+const CATCHUP: chrono::Duration = chrono::Duration::hours(6);
+
 fn archive() -> (tempfile::TempDir, Arc<MrmsArchive>) {
     let dir = tempfile::tempdir().unwrap();
     let archive = Arc::new(MrmsArchive::open(dir.path(), 2).unwrap());
@@ -74,9 +76,9 @@ async fn poll_stores_newest_frame_once() {
     let fake = FakeFetcher::new();
     fake.ok(LIVE_DIR_URL, HTML);
     fake.ok(&live_url(t(17, 18, 34)), common::mrms_fixture());
-    assert_eq!(poll_once(&fake, &archive).await.unwrap(), Some(t(17, 18, 34)));
+    assert_eq!(poll_once(&fake, &archive, CATCHUP).await.unwrap(), vec![t(17, 18, 34)]);
     assert_eq!(archive.frames().unwrap(), vec![t(17, 18, 34)]);
-    assert_eq!(poll_once(&fake, &archive).await.unwrap(), None);
+    assert!(poll_once(&fake, &archive, CATCHUP).await.unwrap().is_empty());
     assert_eq!(fake.calls_to(&live_url(t(17, 18, 34))), 1);
 }
 
@@ -86,7 +88,7 @@ async fn poll_rejects_corrupt_frame() {
     let fake = FakeFetcher::new();
     fake.ok(LIVE_DIR_URL, HTML);
     fake.ok(&live_url(t(17, 18, 34)), b"garbage".to_vec());
-    assert!(poll_once(&fake, &archive).await.is_err());
+    assert!(poll_once(&fake, &archive, CATCHUP).await.is_err());
     assert!(archive.frames().unwrap().is_empty());
 }
 
@@ -95,9 +97,9 @@ async fn poll_reports_listing_failure_and_empty_listing() {
     let (_dir, archive) = archive();
     let fake = FakeFetcher::new();
     fake.fail(LIVE_DIR_URL, "503");
-    assert!(poll_once(&fake, &archive).await.is_err());
+    assert!(poll_once(&fake, &archive, CATCHUP).await.is_err());
     fake.ok(LIVE_DIR_URL, "<html>nothing here</html>");
-    assert!(poll_once(&fake, &archive).await.is_err());
+    assert!(poll_once(&fake, &archive, CATCHUP).await.is_err());
 }
 
 #[tokio::test]
@@ -120,4 +122,38 @@ async fn backfill_fetches_only_missing_frames_in_window() {
     assert_eq!(archive.frames().unwrap(), vec![t(17, 10, 0), t(17, 20, 0)]);
     assert_eq!(fake.calls_to(&s3_url(t(16, 30, 0))), 0, "outside the window");
     assert_eq!(fake.calls_to(&s3_url(t(17, 10, 0))), 0, "already archived");
+}
+
+#[tokio::test]
+async fn poll_fills_gaps_left_by_an_outage() {
+    let (_dir, archive) = archive();
+    let bytes = common::mrms_fixture();
+    archive.store(t(17, 14, 38), &bytes).unwrap();
+    let fake = FakeFetcher::new();
+    let listing = format!(
+        "{}{}",
+        remote_file_name(t(11, 0, 0)), // older than newest - catchup: ignored
+        HTML
+    );
+    fake.ok(LIVE_DIR_URL, listing);
+    fake.ok(&live_url(t(17, 16, 35)), bytes.clone());
+    fake.ok(&live_url(t(17, 18, 34)), bytes.clone());
+    assert_eq!(
+        poll_once(&fake, &archive, CATCHUP).await.unwrap(),
+        vec![t(17, 16, 35), t(17, 18, 34)],
+        "missed frames are filled oldest first"
+    );
+    assert_eq!(fake.calls_to(&live_url(t(11, 0, 0))), 0);
+}
+
+#[tokio::test]
+async fn backfill_continues_past_a_failed_day_listing() {
+    let (_dir, archive) = archive();
+    let fake = FakeFetcher::new();
+    let yesterday = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
+    let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+    fake.fail(&s3_list_url(yesterday), "503");
+    fake.ok(&s3_list_url(today), s3_listing(&[t(0, 30, 0)]));
+    fake.ok(&s3_url(t(0, 30, 0)), common::mrms_fixture());
+    assert_eq!(backfill(&fake, &archive, t(1, 0, 0), 2).await.unwrap(), 1);
 }

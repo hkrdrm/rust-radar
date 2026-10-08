@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&mrms),
         status.clone(),
         Duration::from_secs(config.mrms_poll_secs),
+        chrono::Duration::hours(config.backfill_hours as i64),
     ));
     tokio::spawn(sources::nhc::run(
         Arc::clone(&fetcher),

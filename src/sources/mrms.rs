@@ -9,7 +9,7 @@ use tracing::{info, warn};
 
 use crate::fetch::Fetcher;
 use crate::mrms_archive::MrmsArchive;
-use crate::status::{backoff_delay, Status};
+use crate::status::{backoff_delay, supervise, Status};
 
 pub const SOURCE: &str = "mrms";
 pub const PRODUCT: &str = "MergedReflectivityQCComposite_00.50";
@@ -65,21 +65,32 @@ pub fn days_in_window(start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<NaiveDate
     days
 }
 
-/// Downloads the newest live frame if it is not archived yet. Returns its time if stored.
-pub async fn poll_once(fetcher: &dyn Fetcher, archive: &Arc<MrmsArchive>) -> anyhow::Result<Option<DateTime<Utc>>> {
+/// Downloads every live frame from the last `catchup` (relative to the newest) that is not
+/// archived yet, oldest first, so gaps from outages close on the next good poll.
+/// Fails only when the newest frame itself cannot be stored; older gaps are logged.
+pub async fn poll_once(
+    fetcher: &dyn Fetcher,
+    archive: &Arc<MrmsArchive>,
+    catchup: chrono::Duration,
+) -> anyhow::Result<Vec<DateTime<Utc>>> {
     let listing = fetcher.get(LIVE_DIR_URL).await.context("fetching MRMS listing")?;
-    let Some(&newest) = parse_listing(&String::from_utf8_lossy(&listing)).last() else {
+    let times = parse_listing(&String::from_utf8_lossy(&listing));
+    let Some(&newest) = times.last() else {
         bail!("MRMS listing contains no {PRODUCT} files");
     };
-    if archive.contains(newest) {
-        return Ok(None);
+    let mut stored = Vec::new();
+    for t in times.into_iter().filter(|&t| t >= newest - catchup && !archive.contains(t)) {
+        let result = match fetcher.get(&live_url(t)).await {
+            Ok(bytes) => store(archive, t, bytes).await,
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(()) => stored.push(t),
+            Err(e) if t == newest => return Err(e.context(format!("downloading newest MRMS frame {t}"))),
+            Err(e) => warn!("could not fill MRMS frame {t}: {e:#}"),
+        }
     }
-    let bytes = fetcher
-        .get(&live_url(newest))
-        .await
-        .with_context(|| format!("downloading MRMS frame {newest}"))?;
-    store(archive, newest, bytes).await?;
-    Ok(Some(newest))
+    Ok(stored)
 }
 
 /// Fills gaps in the last `hours` from S3. Individual frame failures are logged and skipped.
@@ -87,10 +98,13 @@ pub async fn backfill(fetcher: &dyn Fetcher, archive: &Arc<MrmsArchive>, now: Da
     let start = now - chrono::Duration::hours(hours as i64);
     let mut stored = 0;
     for day in days_in_window(start, now) {
-        let listing = fetcher
-            .get(&s3_list_url(day))
-            .await
-            .with_context(|| format!("listing MRMS on S3 for {day}"))?;
+        let listing = match fetcher.get(&s3_list_url(day)).await {
+            Ok(listing) => listing,
+            Err(e) => {
+                warn!("backfill skipped {day}: listing MRMS on S3 failed: {e:#}");
+                continue;
+            }
+        };
         for t in parse_listing(&String::from_utf8_lossy(&listing)) {
             if t < start || t > now || archive.contains(t) {
                 continue;
@@ -115,21 +129,22 @@ async fn store(archive: &Arc<MrmsArchive>, t: DateTime<Utc>, bytes: Vec<u8>) -> 
         .context("MRMS store task panicked")?
 }
 
-pub async fn run(fetcher: Arc<dyn Fetcher>, archive: Arc<MrmsArchive>, status: Status, interval: Duration) {
+pub async fn run(
+    fetcher: Arc<dyn Fetcher>,
+    archive: Arc<MrmsArchive>,
+    status: Status,
+    interval: Duration,
+    catchup: chrono::Duration,
+) {
     loop {
-        let failures = match poll_once(fetcher.as_ref(), &archive).await {
-            Ok(new_frame) => {
-                if let Some(t) = new_frame {
-                    info!("stored MRMS frame {t}");
-                }
-                status.success(SOURCE, Utc::now());
-                0
+        let (fetcher, archive) = (Arc::clone(&fetcher), Arc::clone(&archive));
+        let failures = supervise(&status, SOURCE, async move {
+            for t in poll_once(fetcher.as_ref(), &archive, catchup).await? {
+                info!("stored MRMS frame {t}");
             }
-            Err(e) => {
-                warn!("MRMS poll failed: {e:#}");
-                status.failure(SOURCE, &e)
-            }
-        };
+            Ok(())
+        })
+        .await;
         tokio::time::sleep(backoff_delay(interval, failures)).await;
     }
 }

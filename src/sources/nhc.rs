@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use crate::fetch::Fetcher;
 use crate::nhc_archive::{geometry_rank, NhcArchive, StormSnapshot, GEOMETRY_MAPSERVER, GEOMETRY_NONE, GEOMETRY_ZIP};
 use crate::sources::nhc_zip;
-use crate::status::{backoff_delay, Status};
+use crate::status::{backoff_delay, supervise, Status};
 
 pub const SOURCE: &str = "nhc";
 pub const CURRENT_STORMS_URL: &str = "https://www.nhc.noaa.gov/CurrentStorms.json";
@@ -271,19 +271,15 @@ fn check_advisory(features: &[Value], storm: &StormInfo) -> anyhow::Result<()> {
 
 pub async fn run(fetcher: Arc<dyn Fetcher>, archive: Arc<NhcArchive>, status: Status, interval: Duration) {
     loop {
-        let failures = match poll_once(fetcher.as_ref(), &archive).await {
-            Ok(report) => {
-                if report.stored > 0 {
-                    info!("NHC: {} active storms, {} advisories stored", report.active, report.stored);
-                }
-                status.success(SOURCE, Utc::now());
-                0
+        let (fetcher, archive) = (Arc::clone(&fetcher), Arc::clone(&archive));
+        let failures = supervise(&status, SOURCE, async move {
+            let report = poll_once(fetcher.as_ref(), &archive).await?;
+            if report.stored > 0 {
+                info!("NHC: {} active storms, {} advisories stored", report.active, report.stored);
             }
-            Err(e) => {
-                warn!("NHC poll failed: {e:#}");
-                status.failure(SOURCE, &e)
-            }
-        };
+            Ok(())
+        })
+        .await;
         tokio::time::sleep(backoff_delay(interval, failures)).await;
     }
 }
