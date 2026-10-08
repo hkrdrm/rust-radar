@@ -7,3 +7,4 @@ pub mod fetch;
 pub mod status;
 pub mod sources;
 pub mod nhc_archive;
+pub mod server;
