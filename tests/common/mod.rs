@@ -53,3 +53,8 @@ pub fn isaias() -> rust_radar::sources::nhc::StormInfo {
         forecast_zip_url: Some("https://www.nhc.noaa.gov/gis/forecast/archive/al092026_5day_008.zip".into()),
     }
 }
+
+pub fn nhc_zip_fixture() -> Vec<u8> {
+    std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/nhc_5day.zip"))
+        .expect("tests/fixtures/nhc_5day.zip missing - see Task 10 Step 1")
+}
