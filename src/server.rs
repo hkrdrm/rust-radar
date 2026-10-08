@@ -178,7 +178,7 @@ async fn get_tile(
 
     if st.mrms.known_bounds().is_some_and(|b| !tiles::tile_overlaps(b, z, x, y)) {
         let cache_control = if is_latest { "no-cache" } else { "public, max-age=86400" };
-        let png = Bytes::from_static(tiles::empty_tile_png());
+        let png = Bytes::from_static(tiles::no_coverage_tile_png());
         return Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, cache_control)], png).into_response());
     }
 

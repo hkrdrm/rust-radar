@@ -3,7 +3,7 @@
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
-use crate::grid::Grid;
+use crate::grid::{decode_dbz, Grid, NO_COVERAGE};
 use crate::palette::dbz_to_rgba;
 
 pub const TILE_SIZE: u32 = 256;
@@ -44,30 +44,53 @@ pub fn tile_overlaps(bounds: (f64, f64, f64, f64), z: u8, x: u32, y: u32) -> boo
     s < gn && n > gs && w < ge && e > gw
 }
 
+/// Faint diagonal hatch drawn wherever the radar cannot see.
+pub const NO_COVERAGE_RGBA: [u8; 4] = [255, 255, 255, 40];
+const HATCH_SPACING: usize = 8;
+
+fn no_coverage_pixel(px: usize, py: usize) -> [u8; 4] {
+    // Tile sizes are multiples of the spacing, so the hatch lines up across tiles.
+    if (px + py) % HATCH_SPACING == 0 { NO_COVERAGE_RGBA } else { [0, 0, 0, 0] }
+}
+
 pub fn render_tile(grid: &Grid, z: u8, x: u32, y: u32) -> Vec<u8> {
     if !tile_overlaps(grid.bounds(), z, x, y) {
-        return empty_tile_png().to_vec();
+        return no_coverage_tile_png().to_vec();
     }
     let size = TILE_SIZE as usize;
-    // Latitude depends only on the pixel row and longitude only on the column.
-    let centre = |p: usize| (p as f64 + 0.5) / size as f64;
-    let lons: Vec<f64> = (0..size).map(|px| tile_point_to_latlon(z, x, y, centre(px), 0.0).1).collect();
-    let lats: Vec<f64> = (0..size).map(|py| tile_point_to_latlon(z, x, y, 0.0, centre(py)).0).collect();
+    // Pixel edges: latitude depends only on the row, longitude only on the column.
+    let edge = |p: usize| p as f64 / size as f64;
+    let lons: Vec<f64> = (0..=size).map(|px| tile_point_to_latlon(z, x, y, edge(px), 0.0).1).collect();
+    let lats: Vec<f64> = (0..=size).map(|py| tile_point_to_latlon(z, x, y, 0.0, edge(py)).0).collect();
+    // When a pixel spans several cells, pool them so small cells don't vanish at low zoom.
+    let pool = (lons[1] - lons[0]) > 1.5 * grid.dlon;
     let mut rgba = vec![0u8; size * size * 4];
-    for (py, &lat) in lats.iter().enumerate() {
-        for (px, &lon) in lons.iter().enumerate() {
-            if let Some(dbz) = grid.sample(lat, lon) {
-                let i = (py * size + px) * 4;
-                rgba[i..i + 4].copy_from_slice(&dbz_to_rgba(dbz));
-            }
+    for py in 0..size {
+        for px in 0..size {
+            let value = if pool {
+                grid.strongest_in(lats[py], lats[py + 1], lons[px], lons[px + 1])
+            } else {
+                grid.cell((lats[py] + lats[py + 1]) / 2.0, (lons[px] + lons[px + 1]) / 2.0)
+            };
+            let colour = match value {
+                None | Some(NO_COVERAGE) => no_coverage_pixel(px, py),
+                Some(v) => decode_dbz(v).map_or([0, 0, 0, 0], dbz_to_rgba),
+            };
+            let i = (py * size + px) * 4;
+            rgba[i..i + 4].copy_from_slice(&colour);
         }
     }
     encode_png(&rgba)
 }
 
-pub fn empty_tile_png() -> &'static [u8] {
-    static EMPTY: OnceLock<Vec<u8>> = OnceLock::new();
-    EMPTY.get_or_init(|| encode_png(&vec![0u8; (TILE_SIZE * TILE_SIZE * 4) as usize]))
+/// A tile entirely outside radar coverage.
+pub fn no_coverage_tile_png() -> &'static [u8] {
+    static TILE: OnceLock<Vec<u8>> = OnceLock::new();
+    TILE.get_or_init(|| {
+        let size = TILE_SIZE as usize;
+        let rgba: Vec<u8> = (0..size * size).flat_map(|i| no_coverage_pixel(i % size, i / size)).collect();
+        encode_png(&rgba)
+    })
 }
 
 fn encode_png(rgba: &[u8]) -> Vec<u8> {
@@ -85,7 +108,7 @@ fn encode_png(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid::{encode_dbz, Grid};
+    use crate::grid::{encode_dbz, Grid, NO_COVERAGE, NO_DATA};
     use crate::palette::dbz_to_rgba;
 
     fn close(a: f64, b: f64) -> bool {
@@ -151,8 +174,41 @@ mod tests {
     }
 
     #[test]
-    fn tile_outside_grid_is_the_empty_tile() {
-        assert_eq!(render_tile(&uniform_grid(40.0), 3, 4, 2), empty_tile_png());
-        assert!(decode(empty_tile_png()).iter().all(|&b| b == 0));
+    fn tile_outside_grid_is_the_no_coverage_tile() {
+        assert_eq!(render_tile(&uniform_grid(40.0), 3, 4, 2), no_coverage_tile_png());
+        let rgba = decode(no_coverage_tile_png());
+        assert!(rgba.chunks(4).any(|p| p == &NO_COVERAGE_RGBA[..]), "hatched");
+        assert!(rgba.chunks(4).any(|p| p[3] == 0), "hatch leaves the map visible");
+    }
+
+    #[test]
+    fn no_coverage_is_hatched_but_clear_air_is_transparent() {
+        let mut g = uniform_grid(0.0);
+        g.values = vec![NO_DATA; 200 * 200];
+        for row in 0..100 {
+            for col in 0..200 {
+                g.values[row * 200 + col] = NO_COVERAGE; // northern half beyond coverage
+            }
+        }
+        let z = 9;
+        let (x, y) = latlon_to_tile(z, 30.5, -90.0);
+        let north = decode(&render_tile(&g, z, x, y));
+        assert!(north.chunks(4).any(|p| p == &NO_COVERAGE_RGBA[..]));
+        let (x, y) = latlon_to_tile(z + 1, 29.7, -90.0);
+        let (s, w, n, e) = tile_bounds(z + 1, x, y);
+        assert!(s > 29.05 && n < 29.95 && w > -90.95 && e < -89.05, "test tile must lie inside the clear half");
+        let south = decode(&render_tile(&g, z + 1, x, y));
+        assert!(south.chunks(4).all(|p| p[3] == 0), "clear air must stay transparent");
+    }
+
+    #[test]
+    fn low_zoom_keeps_isolated_echo_visible() {
+        let mut g = uniform_grid(0.0);
+        g.values = vec![NO_DATA; 200 * 200];
+        g.values[3 * 200 + 3] = encode_dbz(55.0); // one strong cell near the grid's corner
+        let (lat, lon) = g.cell_center(3 * 200 + 3);
+        let (x, y) = latlon_to_tile(3, lat, lon);
+        let rgba = decode(&render_tile(&g, 3, x, y));
+        assert!(rgba.chunks(4).any(|p| p == &dbz_to_rgba(55.0)[..]), "single cell vanished at low zoom");
     }
 }

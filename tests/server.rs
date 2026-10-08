@@ -171,5 +171,5 @@ async fn tiles_outside_radar_coverage_skip_decoding() {
     // Open Atlantic east of 60W: no decode needed, so even an undecodable frame serves an empty tile.
     let ocean = get(&h, &format!("/tiles/{BROKEN_FRAME}/5/12/12.png")).await;
     assert_eq!(ocean.status, StatusCode::OK);
-    assert_eq!(common::opaque_pixels(&common::decode_png(&ocean.body)), 0);
+    assert_eq!(ocean.body, rust_radar::tiles::no_coverage_tile_png(), "beyond radar range is shown as unknown");
 }

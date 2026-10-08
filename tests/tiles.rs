@@ -13,7 +13,7 @@ fn fixture_rain_renders_coloured_pixels() {
 }
 
 #[test]
-fn fixture_tile_over_europe_is_transparent() {
+fn fixture_tile_over_europe_is_no_coverage() {
     let g = Grid::from_grib2_gz(&common::mrms_fixture()).unwrap();
-    assert_eq!(tiles::render_tile(&g, 3, 4, 2), tiles::empty_tile_png());
+    assert_eq!(tiles::render_tile(&g, 3, 4, 2), tiles::no_coverage_tile_png());
 }
