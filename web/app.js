@@ -3,7 +3,7 @@ const RADAR_STALE_MIN = 10;
 const NHC_STALE_MIN = 60;
 
 const $ = (id) => document.getElementById(id);
-const state = { map: null, frames: [], index: -1, live: true, timer: null, stormRequest: 0, status: null, stormCount: null };
+const state = { map: null, frames: [], index: -1, live: true, timer: null, stormRequest: 0, status: null, stormCount: null, openStormId: null };
 
 const tileUrl = (time) => `/tiles/${encodeURIComponent(time)}/{z}/{x}/{y}.png`;
 const currentTime = () => state.frames[state.index];
@@ -69,9 +69,15 @@ async function refreshFrames() {
   if (state.live || !previous) {
     showFrame(state.frames.length - 1);
   } else {
-    // Old frames may have been pruned; keep showing the same moment if it still exists.
-    state.index = Math.max(0, state.frames.indexOf(previous));
-    $('slider').value = state.index;
+    // Old frames may have been pruned; keep showing the same moment if it still exists,
+    // otherwise move to the oldest frame that does.
+    const kept = state.frames.indexOf(previous);
+    if (kept >= 0) {
+      state.index = kept;
+      $('slider').value = kept;
+    } else {
+      showFrame(0);
+    }
   }
 }
 
@@ -94,6 +100,7 @@ async function loadStorms(time) {
     state.map.getSource('storms').setData(data);
     state.stormCount = data.features.filter((f) => f.properties.layer === 'center').length;
     renderStatus();
+    if (state.openStormId) openPanel(state.openStormId);
   } catch (err) {
     console.warn(err);
   }
@@ -161,16 +168,33 @@ function compass(degrees) {
   return points[Math.round((degrees % 360) / 22.5) % 16];
 }
 
+function closePanel() {
+  state.openStormId = null;
+  $('panel').hidden = true;
+}
+
+function describeMovement(dir, speed) {
+  if (dir == null || speed == null) return 'Unknown';
+  if (speed === 0) return 'Stationary';
+  return `${compass(dir)} at ${speed} mph`;
+}
+
 async function openPanel(stormId) {
-  const time = currentTime();
+  state.openStormId = stormId;
+  // Same moment as the storm layer: "now" when live, the frame time when replaying.
+  const time = state.live ? null : currentTime();
   const query = time ? `?time=${encodeURIComponent(time)}` : '';
-  let data;
-  try {
-    data = await getJson(`/api/storms/${encodeURIComponent(stormId)}${query}`);
-  } catch (err) {
-    console.warn(err);
+  const resp = await fetch(`/api/storms/${encodeURIComponent(stormId)}${query}`).catch((err) => err);
+  if (state.openStormId !== stormId) return;
+  if (resp instanceof Response && resp.status === 404) {
+    closePanel(); // no advisory for this storm at this moment (ended, or before it formed)
     return;
   }
+  if (!(resp instanceof Response) || !resp.ok) {
+    console.warn(resp);
+    return;
+  }
+  const data = await resp.json();
   const s = data.storm;
   const body = $('panel-body');
   body.replaceChildren();
@@ -179,13 +203,13 @@ async function openPanel(stormId) {
   title.textContent = s.name;
   const subtitle = document.createElement('p');
   subtitle.className = 'subtitle';
-  const strength = /^\d$/.test(data.category) ? `Category ${data.category}` : data.category;
-  subtitle.textContent = `${CLASS_NAMES[s.classification] ?? s.classification} · ${strength}`;
+  const className = CLASS_NAMES[s.classification] ?? s.classification;
+  subtitle.textContent = /^\d$/.test(data.category) ? `${className} · Category ${data.category}` : className;
 
   const rows = [
     ['Max wind', `${s.intensity_kt} kt (${Math.round(s.intensity_kt * 1.15078)} mph)`],
     ['Pressure', `${s.pressure_mb} mb`],
-    ['Movement', `${compass(s.movement_dir)} at ${s.movement_speed_mph} mph`],
+    ['Movement', describeMovement(s.movement_dir, s.movement_speed_mph)],
     ['Position', `${s.lat.toFixed(1)}°, ${s.lon.toFixed(1)}°`],
     ['Advisory', `#${s.advisory_num || '?'} · ${formatTime(s.issuance)}`],
   ];
@@ -229,11 +253,16 @@ async function init() {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     }
-    loadStorms(null);
-    await Promise.all([refreshFrames(), refreshStatus()]);
+    // Register polling first so a failed first fetch is retried rather than fatal.
     setInterval(() => refreshFrames().catch(console.warn), 60_000);
     setInterval(() => { if (state.live) loadStorms(null); }, 60_000);
     setInterval(refreshStatus, 30_000);
+    loadStorms(null);
+    refreshStatus();
+    refreshFrames().catch((err) => {
+      console.warn(err);
+      $('time-label').textContent = 'Radar unavailable — retrying…';
+    });
   });
 
   $('play').addEventListener('click', () => (state.timer ? stopPlayback() : startPlayback()));
@@ -254,7 +283,7 @@ async function init() {
   $('opacity').addEventListener('input', (e) => {
     if (map.getLayer('radar')) map.setPaintProperty('radar', 'raster-opacity', Number(e.target.value));
   });
-  $('panel-close').addEventListener('click', () => { $('panel').hidden = true; });
+  $('panel-close').addEventListener('click', closePanel);
 }
 
 init().catch((err) => {
