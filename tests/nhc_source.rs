@@ -135,3 +135,25 @@ async fn later_failure_never_downgrades_stored_geometry() {
     assert_eq!(snapshot.geometry_source, "zip");
     assert!(!snapshot.features.is_empty());
 }
+
+#[tokio::test]
+async fn one_storm_failing_to_store_does_not_skip_the_others() {
+    let (_dir, archive) = archive();
+    let fake = fake_with_mapserver("8");
+    // A storm whose id cannot be stored (not alphanumeric) listed before Isaias.
+    let feed = STORMS.replacen(r#"{"activeStorms":["#, r#"{"activeStorms":[{"id":"al-bad","binNumber":"AT9","name":"Bad","latitudeNumeric":1,"longitudeNumeric":1,"lastUpdate":"2026-10-08T15:00:00.000Z"},"#, 1);
+    fake.ok(CURRENT_STORMS_URL, feed);
+    assert!(poll_once(&fake, &archive).await.is_ok());
+    assert_eq!(stored(&archive).storm.name, "Isaias");
+}
+
+#[tokio::test]
+async fn storms_missing_from_the_feed_are_marked_ended() {
+    let (_dir, archive) = archive();
+    poll_once(&fake_with_mapserver("8"), &archive).await.unwrap();
+    assert_eq!(archive.ended_at("al092026"), None);
+    let empty = FakeFetcher::new();
+    empty.ok(CURRENT_STORMS_URL, r#"{"activeStorms":[]}"#);
+    poll_once(&empty, &archive).await.unwrap();
+    assert!(archive.ended_at("al092026").is_some());
+}

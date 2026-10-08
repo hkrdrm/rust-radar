@@ -18,7 +18,7 @@ use tower_http::services::ServeDir;
 
 use crate::mrms_archive::MrmsArchive;
 use crate::nhc_archive::NhcArchive;
-use crate::sources::nhc::category;
+use crate::sources::nhc::storm_category;
 use crate::status::Status;
 use crate::tiles;
 
@@ -128,7 +128,7 @@ async fn get_storms(State(st): State<Arc<AppState>>, Query(q): Query<TimeQuery>)
                 "layer": "center",
                 "name": s.name,
                 "classification": s.classification,
-                "category": category(s.intensity_kt),
+                "category": storm_category(s),
                 "wind_kt": s.intensity_kt,
                 "pressure_mb": s.pressure_mb,
                 "advisory_num": s.advisory_num,
@@ -150,7 +150,7 @@ async fn get_storm(
         .nhc
         .get(&id.to_lowercase(), t)?
         .ok_or_else(|| ApiError::NotFound(format!("no advisory for storm {id:?} at {}", rfc3339(t))))?;
-    let category = category(snapshot.storm.intensity_kt);
+    let category = storm_category(&snapshot.storm);
     Ok(Json(json!({ "storm": snapshot.storm, "category": category, "geometry_source": snapshot.geometry_source })))
 }
 

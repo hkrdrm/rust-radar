@@ -40,8 +40,9 @@ pub struct StormInfo {
     pub pressure_mb: u32,
     pub lat: f64,
     pub lon: f64,
-    pub movement_dir: u32,
-    pub movement_speed_mph: u32,
+    /// Heading in degrees; `None` when NHC gives no motion.
+    pub movement_dir: Option<u32>,
+    pub movement_speed_mph: Option<u32>,
     pub advisory_num: String,
     pub issuance: DateTime<Utc>,
     pub public_advisory_url: Option<String>,
@@ -100,8 +101,8 @@ fn parse_storm(v: &Value) -> Option<StormInfo> {
         pressure_mb: whole("/pressure"),
         lat: num_field(v, "/latitudeNumeric")?,
         lon: num_field(v, "/longitudeNumeric")?,
-        movement_dir: whole("/movementDir"),
-        movement_speed_mph: whole("/movementSpeed"),
+        movement_dir: num_field(v, "/movementDir").map(|n| n.max(0.0) as u32),
+        movement_speed_mph: num_field(v, "/movementSpeed").map(|n| n.max(0.0) as u32),
         advisory_num: str_field(v, "/publicAdvisory/advNum").unwrap_or("").to_string(),
         issuance,
         public_advisory_url: str_field(v, "/publicAdvisory/url").map(String::from),
@@ -162,6 +163,15 @@ pub fn category(kt: u32) -> &'static str {
     }
 }
 
+/// Label for a storm: Saffir-Simpson category for hurricanes, otherwise NHC's classification.
+pub fn storm_category(storm: &StormInfo) -> String {
+    match storm.classification.as_str() {
+        "HU" => category(storm.intensity_kt.max(64)).to_string(),
+        "" => category(storm.intensity_kt).to_string(),
+        class => class.to_string(),
+    }
+}
+
 /// "008" / "008A" -> 8.
 pub fn advisory_number(advisory: &str) -> Option<u32> {
     let digits: String = advisory.chars().take_while(char::is_ascii_digit).collect();
@@ -177,6 +187,8 @@ pub struct NhcPollReport {
 pub async fn poll_once(fetcher: &dyn Fetcher, archive: &NhcArchive) -> anyhow::Result<NhcPollReport> {
     let body = fetcher.get(CURRENT_STORMS_URL).await.context("fetching CurrentStorms.json")?;
     let storms = parse_current_storms(&body)?;
+    let active: Vec<String> = storms.iter().map(|s| s.id.clone()).collect();
+    archive.record_active(&active, Utc::now())?;
     let mut report = NhcPollReport { active: storms.len(), stored: 0 };
     let pending: Vec<&StormInfo> = storms.iter().filter(|s| !archive.has_geometry(&s.id, s.issuance)).collect();
     if pending.is_empty() {
@@ -195,11 +207,11 @@ pub async fn poll_once(fetcher: &dyn Fetcher, archive: &NhcArchive) -> anyhow::R
         if existing.is_some_and(|e| geometry_rank(&e) > geometry_rank(geometry_source)) {
             continue;
         }
-        archive.store(&StormSnapshot {
-            storm: storm.clone(),
-            features,
-            geometry_source: geometry_source.to_string(),
-        })?;
+        let snapshot = StormSnapshot { storm: storm.clone(), features, geometry_source: geometry_source.to_string() };
+        if let Err(e) = archive.store(&snapshot) {
+            warn!("could not store NHC advisory for {}: {e:#}", storm.id);
+            continue;
+        }
         info!("stored NHC advisory {} for {} ({geometry_source})", storm.advisory_num, storm.name);
         report.stored += 1;
     }

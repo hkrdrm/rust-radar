@@ -33,7 +33,8 @@ fn parses_storms_leniently_and_skips_malformed() {
     assert_eq!(rosa.id, "ep182026", "ids are lower-cased");
     assert_eq!(rosa.intensity_kt, 0, "empty intensity becomes 0");
     assert_eq!(rosa.lat, 19.1, "numeric strings are accepted");
-    assert_eq!(rosa.movement_speed_mph, 5);
+    assert_eq!(rosa.movement_speed_mph, Some(5));
+    assert_eq!(rosa.movement_dir, Some(270));
     assert_eq!(rosa.advisory_num, "");
     assert_eq!(rosa.public_advisory_url, None);
 }
@@ -94,4 +95,32 @@ fn tag_features_adds_ids_and_wind() {
 
     // ArcGIS reports query errors as HTTP 200 with an "error" object.
     assert!(tag_features(json!({"error": {"code": 400}}), "x", "cone").is_err());
+}
+
+#[test]
+fn missing_movement_is_unknown_not_zero() {
+    let feed = br#"{"activeStorms":[{"id":"al102026","binNumber":"AT5","name":"Ten","classification":"TD",
+      "intensity":"30","pressure":"1008","latitudeNumeric":15.0,"longitudeNumeric":-45.0,
+      "lastUpdate":"2026-10-08T15:00:00.000Z"}]}"#;
+    let storm = &parse_current_storms(feed).unwrap()[0];
+    assert_eq!(storm.movement_dir, None);
+    assert_eq!(storm.movement_speed_mph, None);
+}
+
+#[test]
+fn category_follows_classification() {
+    let mut storm = parse_current_storms(CURRENT_STORMS.as_bytes()).unwrap().remove(0);
+    let mut with = |class: &str, kt: u32| {
+        storm.classification = class.into();
+        storm.intensity_kt = kt;
+        storm_category(&storm)
+    };
+    assert_eq!(with("HU", 75), "1");
+    assert_eq!(with("HU", 140), "5");
+    assert_eq!(with("HU", 60), "1", "a hurricane is at least category 1");
+    assert_eq!(with("TS", 50), "TS");
+    assert_eq!(with("TD", 30), "TD");
+    assert_eq!(with("PTC", 50), "PTC", "post-tropical is not a tropical storm");
+    assert_eq!(with("STS", 45), "STS");
+    assert_eq!(with("", 50), "TS", "unknown class falls back to wind speed");
 }

@@ -83,3 +83,40 @@ fn advisory_published_before_its_nominal_time_is_visible() {
     assert_eq!(archive.at_time(just_before).unwrap().len(), 1);
     assert!(archive.get("al092026", t(8, 16)).unwrap().is_none(), "not hours early");
 }
+
+#[test]
+fn storm_dropped_from_the_feed_is_hidden_from_then_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = NhcArchive::open(dir.path()).unwrap();
+    archive.store(&snapshot(t(8, 15), "008", "mapserver")).unwrap();
+
+    archive.record_active(&[], t(8, 16)).unwrap();
+    assert_eq!(archive.ended_at("al092026"), Some(t(8, 16)));
+    assert!(archive.get("al092026", t(8, 17)).unwrap().is_none(), "ended storm still shown live");
+    assert!(archive.at_time(t(8, 17)).unwrap().is_empty());
+    assert!(archive.get("al092026", t(8, 15) + Duration::minutes(30)).unwrap().is_some(), "replay before the end keeps it");
+
+    // Seen again (e.g. regenerated): visible again.
+    archive.record_active(&["al092026".to_string()], t(8, 18)).unwrap();
+    assert_eq!(archive.ended_at("al092026"), None);
+    assert!(archive.get("al092026", t(8, 19)).unwrap().is_some());
+
+    // Survives reopening.
+    archive.record_active(&[], t(8, 20)).unwrap();
+    assert_eq!(NhcArchive::open(dir.path()).unwrap().ended_at("al092026"), Some(t(8, 20)));
+}
+
+#[test]
+fn prune_keeps_the_advisory_covering_the_cutoff() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = NhcArchive::open(dir.path()).unwrap();
+    archive.store(&snapshot(t(5, 9), "001", "mapserver")).unwrap();
+    archive.store(&snapshot(t(5, 21), "003", "mapserver")).unwrap();
+    archive.store(&snapshot(t(8, 15), "008", "mapserver")).unwrap();
+    assert_eq!(archive.prune(t(6, 0)).unwrap(), 1);
+    assert_eq!(
+        archive.get("al092026", t(6, 1)).unwrap().unwrap().storm.advisory_num,
+        "003",
+        "start of the replay window keeps its storm"
+    );
+}
