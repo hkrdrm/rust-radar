@@ -69,3 +69,15 @@ fn prune_removes_old_snapshots_and_leftovers() {
     assert!(!dir.path().join("al092026").join("20261008-150000.json.tmp").exists());
     assert_eq!(archive.at_time(t(8, 16)).unwrap().len(), 1, "stray files are ignored");
 }
+
+#[test]
+fn advisory_published_before_its_nominal_time_is_visible() {
+    // NHC posts advisories a few minutes before their nominal issuance time.
+    let dir = tempfile::tempdir().unwrap();
+    let archive = NhcArchive::open(dir.path()).unwrap();
+    archive.store(&snapshot(t(8, 18), "005a", "mapserver")).unwrap();
+    let just_before = t(8, 18) - Duration::minutes(7);
+    assert_eq!(archive.get("al092026", just_before).unwrap().unwrap().storm.advisory_num, "005a");
+    assert_eq!(archive.at_time(just_before).unwrap().len(), 1);
+    assert!(archive.get("al092026", t(8, 16)).unwrap().is_none(), "not hours early");
+}

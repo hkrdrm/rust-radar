@@ -13,6 +13,8 @@ use crate::sources::nhc::StormInfo;
 pub const GEOMETRY_NONE: &str = "none";
 /// A storm with no advisory for this long is treated as gone.
 pub const STALE_AFTER_HOURS: i64 = 12;
+/// NHC posts advisories shortly before their nominal issuance time.
+pub const EARLY_PUBLISH_MINUTES: i64 = 30;
 const TIME_FORMAT: &str = "%Y%m%d-%H%M%S";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -91,7 +93,8 @@ impl NhcArchive {
         if !valid_storm_id(storm_id) {
             return Ok(None);
         }
-        let current = self.issuances(storm_id)?.into_iter().filter(|&i| i <= t).last();
+        let visible_until = t + Duration::minutes(EARLY_PUBLISH_MINUTES);
+        let current = self.issuances(storm_id)?.into_iter().filter(|&i| i <= visible_until).last();
         match current {
             Some(issuance) if t - issuance <= Duration::hours(STALE_AFTER_HOURS) => {
                 Ok(Some(read_snapshot(&self.snapshot_path(storm_id, issuance))?))

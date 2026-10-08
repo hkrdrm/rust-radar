@@ -1,0 +1,10 @@
+# rust-radar configuration. Every key can also be passed as a CLI flag (e.g. --port 9000).
+port = 8080
+archive_dir = "./archive"
+web_dir = "./web"
+retention_hours = 72
+backfill_hours = 6
+mrms_poll_secs = 60
+nhc_poll_secs = 300
+decoded_cache_frames = 10
+basemap_style = "https://tiles.openfreemap.org/styles/dark"
