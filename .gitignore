@@ -2,3 +2,4 @@
 /archive
 /deploy/.env
 /desktop/gen/
+/desktop/target/
