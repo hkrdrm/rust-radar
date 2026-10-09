@@ -1,9 +1,11 @@
-// rust-radar frontend: MRMS radar tiles + NHC storms on a MapLibre map.
+// rust-radar frontend: MRMS radar tiles + GOES satellite + NHC storms on a MapLibre map.
 const RADAR_STALE_MIN = 10;
 const NHC_STALE_MIN = 60;
 
 const $ = (id) => document.getElementById(id);
-const state = { map: null, frames: [], index: -1, live: true, timer: null, stormRequest: 0, status: null, stormCount: null, openStormId: null };
+const state = { map: null, frames: [], index: -1, live: true, timer: null, stormRequest: 0, status: null, stormCount: null, openStormId: null, satTime: null };
+const SATELLITE_KEY = 'rust-radar.satellite';
+const SATELLITE_SOURCES = { 'sat-west': GOES_WEST_LAYER, 'sat-east': GOES_EAST_LAYER };
 
 const tileUrl = (time) => `/tiles/${encodeURIComponent(time)}/{z}/{x}/{y}.png`;
 const currentTime = () => state.frames[state.index];
@@ -31,6 +33,18 @@ function addLayers(map) {
   const layers = map.getStyle().layers;
   const firstSymbol = layers.find((l) => l.type === 'symbol')?.id;
   const font = layers.find((l) => Array.isArray(l.layout?.['text-font']))?.layout['text-font'];
+
+  // Satellite covers the basemap's land and water but stays under its roads, borders and labels.
+  // Opaque, so where the two sources' tiles overlap GOES-East simply wins instead of doubling up.
+  const firstLine = layers.find((l) => l.type !== 'background' && l.type !== 'fill')?.id;
+  const satVisibility = $('satellite').checked ? 'visible' : 'none';
+  for (const [id, layer] of Object.entries(SATELLITE_SOURCES)) {
+    const bounds = id === 'sat-west' ? [-180, -85, GOES_SPLIT_LON, 85] : [GOES_SPLIT_LON, -85, 180, 85];
+    map.addSource(id, { type: 'raster', tiles: [gibsTileUrl(layer, satelliteTime(undefined, Date.now()))],
+      tileSize: 256, maxzoom: GIBS_MAX_ZOOM, bounds });
+    map.addLayer({ id, type: 'raster', source: id, layout: { visibility: satVisibility },
+      paint: { 'raster-fade-duration': 0 } }, firstLine);
+  }
 
   map.addSource('radar', { type: 'raster', tiles: [tileUrl('latest')], tileSize: 256, maxzoom: 10 });
   map.addLayer({ id: 'radar', type: 'raster', source: 'radar',
@@ -86,10 +100,36 @@ function showFrame(i) {
   const time = currentTime();
   state.map.getSource('radar').setTiles([tileUrl(time)]);
   $('slider').value = i;
-  $('time-label').textContent = formatTime(time);
+  showSatellite();
   // Live storms come from "now", independent of radar, so a radar outage cannot hide or freeze them.
   loadStorms(state.live ? null : time);
   renderStatus();
+}
+
+const satelliteOn = () => $('satellite').checked;
+
+// Point the satellite at the image for the current frame; only re-requests tiles when that image changes.
+function showSatellite() {
+  const frame = currentTime();
+  const satTime = satelliteTime(state.live ? undefined : frame, Date.now());
+  if (satelliteOn() && satTime !== state.satTime) {
+    state.satTime = satTime;
+    for (const [id, layer] of Object.entries(SATELLITE_SOURCES)) {
+      state.map.getSource(id).setTiles([gibsTileUrl(layer, satTime)]);
+    }
+  }
+  if (!frame) return; // keep the "waiting for radar" message
+  const satLabel = new Date(satTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  $('time-label').textContent = satelliteOn() ? `${formatTime(frame)} · Sat ${satLabel}` : formatTime(frame);
+}
+
+function setSatellite(on) {
+  try { localStorage.setItem(SATELLITE_KEY, on ? '1' : '0'); } catch (err) { /* storage unavailable */ }
+  if (!state.map?.getLayer('sat-east')) return; // not loaded yet; addLayers reads the checkbox
+  for (const id of Object.keys(SATELLITE_SOURCES)) {
+    state.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+  }
+  showSatellite();
 }
 
 async function loadStorms(time) {
@@ -122,7 +162,8 @@ function startPlayback() {
   setLive(false);
   state.timer = setInterval(() => {
     // Wait for the current frame's tiles; otherwise requests pile up faster than the server can render.
-    if (!state.map.isSourceLoaded('radar')) return;
+    const sources = satelliteOn() ? ['radar', ...Object.keys(SATELLITE_SOURCES)] : ['radar'];
+    if (!sources.every((id) => state.map.isSourceLoaded(id))) return;
     showFrame((state.index + 1) % state.frames.length);
   }, Number($('speed').value));
   $('play').textContent = '⏸';
@@ -236,6 +277,7 @@ async function openPanel(stormId) {
 }
 
 async function init() {
+  try { $('satellite').checked = localStorage.getItem(SATELLITE_KEY) === '1'; } catch (err) { /* storage unavailable */ }
   const config = await getJson('/api/config');
   const map = new maplibregl.Map({ container: 'map', style: config.basemap_style, center: [-85, 27], zoom: 4 });
   state.map = map;
@@ -283,6 +325,7 @@ async function init() {
   $('opacity').addEventListener('input', (e) => {
     if (map.getLayer('radar')) map.setPaintProperty('radar', 'raster-opacity', Number(e.target.value));
   });
+  $('satellite').addEventListener('change', (e) => setSatellite(e.target.checked));
   $('panel-close').addEventListener('click', closePanel);
 }
 

@@ -22,11 +22,16 @@ bucket. That takes a few minutes and uses about 200 MB. Configuration lives in
   nearby waters.
 - **Storms:** `nhc.noaa.gov/CurrentStorms.json`, plus the NHC GIS map service.
   The per-advisory shapefile zip is the fallback.
+- **Satellite (optional, "Satellite" switch):** GOES-East and GOES-West infrared
+  (ABI Band 13) from NASA GIBS. The browser loads these tiles straight from NASA,
+  so the server does no extra work. Images arrive every 10 minutes, about 40
+  minutes behind live, and follow the time slider in replay.
 
 ## Test
 
 ```bash
 cargo test
+node --test 'web/*.test.js'   # frontend time logic (Node 18+)
 ```
 
 Tests use the fixtures in `tests/fixtures/` and never touch the network.

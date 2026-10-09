@@ -28,3 +28,4 @@ a { color: var(--accent); }
 .legend { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .hatch { width: 16px; height: 16px; border: 1px solid #3c4049; border-radius: 2px;
   background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.35) 0 1px, transparent 1px 6px); }
+.toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
