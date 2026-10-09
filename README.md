@@ -43,3 +43,20 @@ Tests use the fixtures in `tests/fixtures/` and never touch the network.
 
 To run it on an Ubuntu server behind nginx with a password, see
 [deploy/README.md](deploy/README.md).
+
+## Desktop app (Linux)
+
+Runs everything on your machine — no server or password. Radar is collected only while the window
+is open; when you reopen it, it catches up on the last 2 hours.
+
+One-time setup: `sudo apt install libwebkit2gtk-4.1-dev librsvg2-dev` (if not already installed) and
+`cargo install tauri-cli --version '^2' --locked`.
+
+Build: `desktop/build.sh` → `target/release/bundle/deb/*.deb` (install with `sudo apt install ./<file>.deb`)
+and `target/release/bundle/appimage/*.AppImage` (run directly).
+
+- Data: `~/.local/share/rust-radar/` (72 hours kept). Log: `~/.local/share/rust-radar/rust-radar.log`.
+- Optional settings: `~/.config/rust-radar/rust-radar.toml`, same keys as `rust-radar.toml`
+  (`port` and `web_dir` are ignored — the app picks those; it uses port 47801 when free so the
+  page remembers your choices between launches).
+- For development: `cargo run -p rust-radar-desktop`.

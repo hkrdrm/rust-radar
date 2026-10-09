@@ -55,7 +55,12 @@ fn launch(app: &AppHandle) -> anyhow::Result<tauri::Url> {
     log_file::init(&data_dir.join("rust-radar.log"))?;
     let mut config = settings::load(&config_file, &data_dir, &web_dir(app)?)?;
     config.port = port::pick_port(port::PREFERRED_PORT);
-    tracing::info!("desktop: archive {}, settings {}", config.archive_dir.display(), config_file.display());
+    tracing::info!(
+        "desktop: archive {}, settings {}, page files {}",
+        config.archive_dir.display(),
+        config_file.display(),
+        config.web_dir.display()
+    );
     let fetcher = Arc::new(rust_radar::fetch::HttpFetcher::new()?);
     let running = tauri::async_runtime::block_on(rust_radar::app::start(&config, fetcher))?;
     Ok(format!("http://127.0.0.1:{}/", running.port).parse()?)
