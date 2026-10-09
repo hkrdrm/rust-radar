@@ -213,13 +213,14 @@ function stopPlayback() {
 function startPlayback() {
   if (state.frames.length < 2) return;
   setLive(false);
+  const { tickMs, step } = playbackSpeed($('speed').value);
   state.timer = setInterval(() => {
     // Wait for the current frame's tiles; otherwise requests pile up faster than the server can render.
     const style = satelliteStyle();
     const sources = style === 'off' ? ['radar'] : ['radar', ...satSources(style)];
     if (state.satPending || !sources.every((id) => state.map.isSourceLoaded(id))) return;
-    showFrame((state.index + 1) % state.frames.length);
-  }, Number($('speed').value));
+    showFrame(nextFrameIndex(state.index, step, state.frames.length));
+  }, tickMs);
   $('play').textContent = '⏸';
 }
 

@@ -19,9 +19,12 @@
     <input id="slider" type="range" min="0" max="0" value="0" aria-label="Radar time">
     <span id="time-label">–</span>
     <select id="speed" aria-label="Playback speed">
-      <option value="1000">1×</option>
-      <option value="500" selected>2×</option>
-      <option value="250">4×</option>
+      <option value="1">1×</option>
+      <option value="2" selected>2×</option>
+      <option value="4">4×</option>
+      <option value="10">10×</option>
+      <option value="25">25×</option>
+      <option value="100">100×</option>
     </select>
     <button id="live" class="active">Live</button>
     <label title="GOES-East and GOES-West imagery from NASA GIBS, 30–60 minutes behind live">Satellite
@@ -36,6 +39,7 @@
   </div>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="satellite.js"></script>
+  <script src="playback.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

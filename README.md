@@ -34,7 +34,7 @@ bucket. That takes a few minutes and uses about 200 MB. Configuration lives in
 
 ```bash
 cargo test
-node --test 'web/*.test.js'   # frontend time logic (Node 18+)
+node --test 'web/*.test.js'   # frontend satellite and playback logic (Node 18+)
 ```
 
 Tests use the fixtures in `tests/fixtures/` and never touch the network.
