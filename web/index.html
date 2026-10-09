@@ -24,7 +24,13 @@
       <option value="250">4×</option>
     </select>
     <button id="live" class="active">Live</button>
-    <label class="toggle" title="GOES infrared from NASA GIBS, about 40 minutes behind live"><input id="satellite" type="checkbox"> Satellite</label>
+    <label title="GOES-East and GOES-West imagery from NASA GIBS, 30–60 minutes behind live">Satellite
+      <select id="satellite">
+        <option value="off">Off</option>
+        <option value="infrared">Infrared</option>
+        <option value="geocolor">GeoColor</option>
+      </select>
+    </label>
     <label>Radar <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.8"></label>
     <span class="legend" title="Areas beyond the reach of any radar: rain there is unknown, not absent"><i class="hatch"></i>No radar coverage</span>
   </div>

@@ -22,10 +22,13 @@ bucket. That takes a few minutes and uses about 200 MB. Configuration lives in
   nearby waters.
 - **Storms:** `nhc.noaa.gov/CurrentStorms.json`, plus the NHC GIS map service.
   The per-advisory shapefile zip is the fallback.
-- **Satellite (optional, "Satellite" switch):** GOES-East and GOES-West infrared
-  (ABI Band 13) from NASA GIBS. The browser loads these tiles straight from NASA,
-  so the server does no extra work. Images arrive every 10 minutes, about 40
-  minutes behind live, and follow the time slider in replay.
+- **Satellite (optional, "Satellite" menu):** GOES-East and GOES-West imagery
+  from NASA GIBS. **Infrared** (ABI Band 13) colours storm-top temperature day
+  and night. **GeoColor** is true colour by day and clouds with city lights by
+  night. The browser loads these tiles straight from NASA, so the server does no
+  extra work. Images come every 10 minutes and follow the time slider in replay.
+  The page shows the newest image NASA has actually published, stepping back past
+  gaps: usually 30–40 minutes behind live for infrared, about 50 for GeoColor.
 
 ## Test
 

@@ -3,9 +3,12 @@ const RADAR_STALE_MIN = 10;
 const NHC_STALE_MIN = 60;
 
 const $ = (id) => document.getElementById(id);
-const state = { map: null, frames: [], index: -1, live: true, timer: null, stormRequest: 0, status: null, stormCount: null, openStormId: null, satTime: null };
+const state = { map: null, frames: [], index: -1, live: true, timer: null, stormRequest: 0, status: null, stormCount: null, openStormId: null,
+  satTime: null, satShown: null, satRequest: 0, satPending: false };
 const SATELLITE_KEY = 'rust-radar.satellite';
-const SATELLITE_SOURCES = { 'sat-west': GOES_WEST_LAYER, 'sat-east': GOES_EAST_LAYER };
+const satelliteStyle = () => $('satellite').value; // 'off', 'infrared' or 'geocolor'
+const satSources = (style) => [`sat-${style}-west`, `sat-${style}-east`];
+const satAvailability = new Map(); // "style|time" -> Promise<boolean>
 
 const tileUrl = (time) => `/tiles/${encodeURIComponent(time)}/{z}/{x}/{y}.png`;
 const currentTime = () => state.frames[state.index];
@@ -37,13 +40,18 @@ function addLayers(map) {
   // Satellite covers the basemap's land and water but stays under its roads, borders and labels.
   // Opaque, so where the two sources' tiles overlap GOES-East simply wins instead of doubling up.
   const firstLine = layers.find((l) => l.type !== 'background' && l.type !== 'fill')?.id;
-  const satVisibility = $('satellite').checked ? 'visible' : 'none';
-  for (const [id, layer] of Object.entries(SATELLITE_SOURCES)) {
-    const bounds = id === 'sat-west' ? [-180, -85, GOES_SPLIT_LON, 85] : [GOES_SPLIT_LON, -85, 180, 85];
-    map.addSource(id, { type: 'raster', tiles: [gibsTileUrl(layer, satelliteTime(undefined, Date.now()))],
-      tileSize: 256, maxzoom: GIBS_MAX_ZOOM, bounds });
-    map.addLayer({ id, type: 'raster', source: id, layout: { visibility: satVisibility },
-      paint: { 'raster-fade-duration': 0 } }, firstLine);
+  // Hidden until showSatellite has found an image that exists.
+  const placeholderTime = satelliteSteps(undefined, Date.now())[0];
+  for (const [style, { east, west, maxzoom }] of Object.entries(SATELLITE_STYLES)) {
+    const [westId, eastId] = satSources(style);
+    for (const [id, layer, bounds] of [
+      [westId, west, [-180, -85, GOES_SPLIT_LON, 85]],
+      [eastId, east, [GOES_SPLIT_LON, -85, 180, 85]],
+    ]) {
+      map.addSource(id, { type: 'raster', tiles: [gibsTileUrl(layer, placeholderTime, maxzoom)], tileSize: 256, maxzoom, bounds });
+      map.addLayer({ id, type: 'raster', source: id, layout: { visibility: 'none' },
+        paint: { 'raster-fade-duration': 0 } }, firstLine);
+    }
   }
 
   map.addSource('radar', { type: 'raster', tiles: [tileUrl('latest')], tileSize: 256, maxzoom: 10 });
@@ -100,35 +108,80 @@ function showFrame(i) {
   const time = currentTime();
   state.map.getSource('radar').setTiles([tileUrl(time)]);
   $('slider').value = i;
+  renderTimeLabel();
   showSatellite();
   // Live storms come from "now", independent of radar, so a radar outage cannot hide or freeze them.
   loadStorms(state.live ? null : time);
   renderStatus();
 }
 
-const satelliteOn = () => $('satellite').checked;
-
-// Point the satellite at the image for the current frame; only re-requests tiles when that image changes.
-function showSatellite() {
+function renderTimeLabel() {
   const frame = currentTime();
-  const satTime = satelliteTime(state.live ? undefined : frame, Date.now());
-  if (satelliteOn() && satTime !== state.satTime) {
-    state.satTime = satTime;
-    for (const [id, layer] of Object.entries(SATELLITE_SOURCES)) {
-      state.map.getSource(id).setTiles([gibsTileUrl(layer, satTime)]);
-    }
-  }
   if (!frame) return; // keep the "waiting for radar" message
-  const satLabel = new Date(satTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  $('time-label').textContent = satelliteOn() ? `${formatTime(frame)} · Sat ${satLabel}` : formatTime(frame);
+  let text = formatTime(frame);
+  if (satelliteStyle() !== 'off') {
+    const sat = state.satTime && new Date(state.satTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    text += sat ? ` · Sat ${sat}` : state.satPending ? ' · Sat …' : ' · Sat unavailable';
+  }
+  $('time-label').textContent = text;
 }
 
-function setSatellite(on) {
-  try { localStorage.setItem(SATELLITE_KEY, on ? '1' : '0'); } catch (err) { /* storage unavailable */ }
-  if (!state.map?.getLayer('sat-east')) return; // not loaded yet; addLayers reads the checkbox
-  for (const id of Object.keys(SATELLITE_SOURCES)) {
-    state.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+// Whether GIBS has published this image for both satellites, checked with one small HEAD request each.
+function imageExists(style, time) {
+  const key = `${style}|${time}`;
+  if (!satAvailability.has(key)) {
+    const { east, west, maxzoom } = SATELLITE_STYLES[style];
+    const head = (layer) => fetch(gibsTileUrl(layer, time, maxzoom).replace('{z}/{y}/{x}', '0/0/0'), { method: 'HEAD' })
+      .then((resp) => resp.ok, () => false);
+    const probe = Promise.all([head(east), head(west)]).then(([e, w]) => e && w);
+    satAvailability.set(key, probe);
+    // A missing recent image may still be on its way; forget the miss so it is checked again.
+    probe.then((ok) => { if (!ok) setTimeout(() => satAvailability.delete(key), 120_000); });
   }
+  return satAvailability.get(key);
+}
+
+// Point a satellite source at a new image. MapLibre's reload skips tiles that failed before (say, asked
+// for while NASA was still publishing), which would leave holes; retry those too. Internal API, 4.7.1.
+function setSatelliteTiles(id, url) {
+  state.map.getSource(id).setTiles([url]);
+  const cache = state.map.style.sourceCaches[id];
+  for (const key in cache._tiles) {
+    if (cache._tiles[key].state === 'errored') cache._reloadTile(key, 'reloading');
+  }
+}
+
+// Show the selected satellite style at the newest published image for the current frame.
+async function showSatellite() {
+  if (!state.map?.getLayer('sat-infrared-east')) return; // map not loaded yet; it calls back in
+  const style = satelliteStyle();
+  const request = ++state.satRequest;
+  state.satPending = style !== 'off';
+  if (state.satPending) {
+    const steps = satelliteSteps(state.live ? undefined : currentTime(), Date.now());
+    const time = await newestAvailable(steps, (t) => imageExists(style, t));
+    if (request !== state.satRequest) return; // a newer frame or style took over
+    state.satPending = false;
+    state.satTime = time; // null: nothing published in the last hour; keep the previous image up
+    if (time && `${style}|${time}` !== state.satShown) {
+      state.satShown = `${style}|${time}`;
+      const { east, west, maxzoom } = SATELLITE_STYLES[style];
+      const [westId, eastId] = satSources(style);
+      setSatelliteTiles(westId, gibsTileUrl(west, time, maxzoom));
+      setSatelliteTiles(eastId, gibsTileUrl(east, time, maxzoom));
+    }
+  }
+  // A style becomes visible only once its sources point at an image that exists.
+  for (const s of Object.keys(SATELLITE_STYLES)) {
+    const on = s === style && state.satShown?.startsWith(`${s}|`);
+    for (const id of satSources(s)) state.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+  }
+  renderTimeLabel();
+}
+
+function setSatelliteStyle(style) {
+  try { localStorage.setItem(SATELLITE_KEY, style); } catch (err) { /* storage unavailable */ }
+  state.satTime = null;
   showSatellite();
 }
 
@@ -162,8 +215,9 @@ function startPlayback() {
   setLive(false);
   state.timer = setInterval(() => {
     // Wait for the current frame's tiles; otherwise requests pile up faster than the server can render.
-    const sources = satelliteOn() ? ['radar', ...Object.keys(SATELLITE_SOURCES)] : ['radar'];
-    if (!sources.every((id) => state.map.isSourceLoaded(id))) return;
+    const style = satelliteStyle();
+    const sources = style === 'off' ? ['radar'] : ['radar', ...satSources(style)];
+    if (state.satPending || !sources.every((id) => state.map.isSourceLoaded(id))) return;
     showFrame((state.index + 1) % state.frames.length);
   }, Number($('speed').value));
   $('play').textContent = '⏸';
@@ -277,7 +331,7 @@ async function openPanel(stormId) {
 }
 
 async function init() {
-  try { $('satellite').checked = localStorage.getItem(SATELLITE_KEY) === '1'; } catch (err) { /* storage unavailable */ }
+  try { $('satellite').value = parseStoredStyle(localStorage.getItem(SATELLITE_KEY)); } catch (err) { /* storage unavailable */ }
   const config = await getJson('/api/config');
   const map = new maplibregl.Map({ container: 'map', style: config.basemap_style, center: [-85, 27], zoom: 4 });
   state.map = map;
@@ -325,7 +379,7 @@ async function init() {
   $('opacity').addEventListener('input', (e) => {
     if (map.getLayer('radar')) map.setPaintProperty('radar', 'raster-opacity', Number(e.target.value));
   });
-  $('satellite').addEventListener('change', (e) => setSatellite(e.target.checked));
+  $('satellite').addEventListener('change', (e) => setSatelliteStyle(e.target.value));
   $('panel-close').addEventListener('click', closePanel);
 }
 
