@@ -67,6 +67,7 @@ impl NhcArchive {
     pub fn open(dir: impl Into<PathBuf>) -> anyhow::Result<NhcArchive> {
         let dir = dir.into();
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        crate::mrms_archive::check_writable(&dir)?;
         let ended = match fs::read(dir.join(ENDED_FILE)) {
             Ok(bytes) => serde_json::from_slice(&bytes).context("parsing ended.json")?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),

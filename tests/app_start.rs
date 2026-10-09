@@ -44,3 +44,23 @@ async fn start_fails_when_archive_dir_is_a_file() {
     let err = app::start(&config(file.clone()), Arc::new(FakeFetcher::new())).await.err().expect("should fail");
     assert!(format!("{err:#}").contains("not-a-dir"), "error should name the path: {err:#}");
 }
+
+#[tokio::test]
+async fn start_fails_when_existing_archive_dirs_are_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::fs::read_to_string("/proc/self/status").unwrap_or_default().lines().any(|l| l.starts_with("Uid:\t0\t")) {
+        return; // root can write anywhere; nothing to test
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for sub in ["mrms", "nhc"] {
+        let path = dir.path().join(sub);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let result = app::start(&config(dir.path().to_path_buf()), Arc::new(FakeFetcher::new())).await;
+    for sub in ["mrms", "nhc"] {
+        std::fs::set_permissions(dir.path().join(sub), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let err = result.err().expect("a read-only archive should fail at startup, not on every poll");
+    assert!(format!("{err:#}").contains(&dir.path().display().to_string()), "error should name the path: {err:#}");
+}

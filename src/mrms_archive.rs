@@ -39,6 +39,7 @@ impl MrmsArchive {
     pub fn open(dir: impl Into<PathBuf>, cache_frames: usize) -> anyhow::Result<MrmsArchive> {
         let dir = dir.into();
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        check_writable(&dir)?;
         for entry in fs::read_dir(&dir)? {
             let path = entry?.path();
             if path.extension().is_some_and(|e| e == "tmp") {
@@ -123,4 +124,12 @@ impl MrmsArchive {
         }
         Ok(removed)
     }
+}
+
+/// Fails now, naming the directory, rather than on every later poll.
+pub(crate) fn check_writable(dir: &std::path::Path) -> anyhow::Result<()> {
+    let probe = dir.join(".write-test.tmp");
+    fs::write(&probe, b"").with_context(|| format!("{} is not writable", dir.display()))?;
+    fs::remove_file(&probe).with_context(|| format!("removing {}", probe.display()))?;
+    Ok(())
 }
