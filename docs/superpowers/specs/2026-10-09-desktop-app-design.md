@@ -64,8 +64,8 @@ An optional `~/.config/rust-radar/rust-radar.toml` (same keys, `deny_unknown_fie
 a missing file is fine. `port` and `web_dir` are always set by the app (a free port and the bundled
 `web/` directory), whatever the file says.
 
-Paths come from Tauri's path resolver (`app_data_dir`, `app_config_dir`) so other platforms would get
-their native locations if ever added.
+Paths come from Tauri's path resolver (`data_dir()`, `config_dir()`, each joined with `rust-radar`) so
+other platforms would get their native locations if ever added.
 
 ### Logging
 
